@@ -222,6 +222,17 @@ func (s *coreService) SetSocks5Port(args StringReply, _ *EmptyArgs) error {
 	return s.runtime.ruleManager.SaveConfig()
 }
 
+func (s *coreService) SetHttpEnabled(args BoolReply, _ *EmptyArgs) error {
+	s.runtime.proxyServer.SetHttpEnabled(args.Value)
+	s.runtime.ruleManager.SetHttpEnabled(args.Value)
+	return s.runtime.ruleManager.SaveConfig()
+}
+
+func (s *coreService) GetHttpEnabled(_ EmptyArgs, reply *BoolReply) error {
+	reply.Value = s.runtime.proxyServer.IsHttpEnabled()
+	return nil
+}
+
 // RunCoreMain starts the core RPC server. Called from main when --core flag is present.
 func RunCoreMain() error {
 	// The core hosts the proxy, and its stderr goes nowhere when the desktop app

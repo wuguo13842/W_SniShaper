@@ -402,6 +402,11 @@
       "desc": "When enabled, a separate SOCKS5 proxy server will be started.",
       "port": "Port"
     },
+    "http": {
+      "title": "Enable HTTP Support",
+      "desc": "When disabled, the HTTP proxy port will not be started.",
+      "port": "Port"
+    },
     "min_to_tray": {
       "title": "Minimize to Tray",
       "desc": "Hide to tray instead of exiting when clicking close."

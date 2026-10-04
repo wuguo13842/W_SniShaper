@@ -44,5 +44,6 @@
     "api_key": ""
   },
   "socks5_enabled": false,
+  "http_enabled": true,
   "migration_enabled": true
 }

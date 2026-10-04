@@ -161,6 +161,7 @@ type SettingsConfig struct {
 	Theme                         string            `json:"theme,omitempty"`
 	CloudflareConfig              CloudflareConfig  `json:"cloudflare_config,omitempty"`
 	Socks5Enabled                 *bool             `json:"socks5_enabled,omitempty"`
+	HttpEnabled                   *bool             `json:"http_enabled,omitempty"`
 	MigrationEnabled              *bool             `json:"migration_enabled,omitempty"`
 	MigrationServer               string            `json:"migration_server,omitempty"`
 	UpdateChannel                 string            `json:"update_channel,omitempty"`
@@ -257,6 +258,7 @@ type ProxyServer struct {
 	socks5Enabled     bool
 	socks5Server      *socks5.Server
 	socks5Tracker     *socks5ConnTracker
+	httpEnabled       bool
 
 	// CF IP pool 刷新回调：当池过期时由 app 层注入
 	cfRefreshCallback func()
@@ -364,6 +366,7 @@ func NewProxyServer(addr string) *ProxyServer {
 		certCache:   make(map[string]*tls.Certificate),
 		mode:        "direct",
 		transport:   transport,
+		httpEnabled: true,
 	}
 
 	p.dohResolver = dohresolver.NewFailoverResolver(&dohProxyAdapter{p: p}, func() []dohresolver.DNSNode {
@@ -577,40 +580,54 @@ func (p *ProxyServer) Start() error {
 		return nil
 	}
 
-	srv := &http.Server{
-		Addr:         p.listenAddr,
-		Handler:      http.HandlerFunc(p.handleRequest),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-	}
-	listenAddr := p.listenAddr
-
 	if p.cfPool != nil {
 		p.cfPool.Start()
 	}
 
-	p.mu.Unlock()
-
-	ln, err := net.Listen("tcp", listenAddr)
-	if err != nil {
-		if p.cfPool != nil {
-			p.cfPool.Stop()
-		}
-		return fmt.Errorf("failed to listen on %s: %w", listenAddr, err)
-	}
-
-	p.mu.Lock()
-	if p.running {
-		p.mu.Unlock()
-		_ = ln.Close()
-		return nil
-	}
-	p.Server = srv
+	httpEnabled := p.httpEnabled
+	listenAddr := p.listenAddr
+	socks5Enabled := p.socks5Enabled
 	p.running = true
 	p.mu.Unlock()
 
-	// Periodic cert cache cleanup (异步化运行，解决永久阻塞)
+	if httpEnabled {
+		if err := p.startHTTPListener(listenAddr); err != nil {
+			p.mu.Lock()
+			p.running = false
+			p.mu.Unlock()
+			if p.cfPool != nil {
+				p.cfPool.Stop()
+			}
+			return fmt.Errorf("failed to listen on %s: %w", listenAddr, err)
+		}
+	}
+
 	go p.certCacheCleanup(context.Background())
+
+	if socks5Enabled {
+		p.startSocks5()
+	}
+
+	return nil
+}
+
+// startHTTPListener 启一个 HTTP 代理 listener。
+func (p *ProxyServer) startHTTPListener(listenAddr string) error {
+	srv := &http.Server{
+		Addr:         listenAddr,
+		Handler:      http.HandlerFunc(p.handleRequest),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+	}
+
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		return err
+	}
+
+	p.mu.Lock()
+	p.Server = srv
+	p.mu.Unlock()
 
 	go func() {
 		defer func() {
@@ -628,9 +645,9 @@ func (p *ProxyServer) Start() error {
 		serveErr := srv.Serve(tl)
 
 		p.mu.Lock()
-		isUnexpected := serveErr != nil && serveErr != http.ErrServerClosed && p.running
+		isUnexpected := serveErr != nil && serveErr != http.ErrServerClosed && p.running && p.Server == srv
 		if p.Server == srv {
-			p.running = false
+			p.Server = nil
 		}
 		p.mu.Unlock()
 
@@ -644,11 +661,21 @@ func (p *ProxyServer) Start() error {
 		}
 	}()
 
-	if p.socks5Enabled {
-		p.startSocks5()
-	}
-
 	return nil
+}
+
+// stopHTTPListener 关闭 HTTP listener，但不改动 p.running。
+func (p *ProxyServer) stopHTTPListener() {
+	p.mu.Lock()
+	srv := p.Server
+	p.Server = nil
+	p.mu.Unlock()
+
+	if srv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}
 }
 
 func (p *ProxyServer) Stop() error {
@@ -671,14 +698,16 @@ func (p *ProxyServer) Stop() error {
 		p.cfPool.Stop()
 	}
 
+	srv := p.Server
+	p.Server = nil
+	p.mu.Unlock()
+
 	var err error
-	if p.Server != nil {
+	if srv != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		err = p.Server.Shutdown(ctx)
-		p.Server = nil
+		err = srv.Shutdown(ctx)
 	}
-	p.mu.Unlock()
 
 	p.tracef("[Proxy] Server stopped")
 	return err
@@ -704,6 +733,33 @@ func (p *ProxyServer) SetSocks5Enabled(enabled bool) {
 			}
 		}
 	}
+}
+
+func (p *ProxyServer) SetHttpEnabled(enabled bool) {
+	p.mu.Lock()
+	p.httpEnabled = enabled
+	running := p.running
+	hasServer := p.Server != nil
+	listenAddr := p.listenAddr
+	p.mu.Unlock()
+
+	if !running {
+		return
+	}
+
+	if enabled && !hasServer {
+		if err := p.startHTTPListener(listenAddr); err != nil {
+			log.Printf("[Proxy] Failed to start HTTP listener on %s: %v", listenAddr, err)
+		}
+	} else if !enabled && hasServer {
+		p.stopHTTPListener()
+	}
+}
+
+func (p *ProxyServer) IsHttpEnabled() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.httpEnabled
 }
 
 func (p *ProxyServer) IsSocks5Enabled() bool {

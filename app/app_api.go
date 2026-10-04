@@ -366,6 +366,22 @@ func (a *App) SetSocks5Port(port string) error {
 	return nil
 }
 
+func (a *App) GetHttpEnabled() bool {
+	return a.ruleManager.GetHttpEnabled()
+}
+
+func (a *App) SetHttpEnabled(enabled bool) error {
+	a.appendLog(fmt.Sprintf("[action] SetHttpEnabled: %v", enabled))
+	a.proxyServer.SetHttpEnabled(enabled)
+	a.ruleManager.SetHttpEnabled(enabled)
+	_ = a.ruleManager.SaveConfig()
+	if a.core != nil {
+		var empty core.EmptyArgs
+		_ = a.core.Call("Core.SetHttpEnabled", core.BoolReply{Value: enabled}, &empty)
+	}
+	return nil
+}
+
 func (a *App) GetProxyMode() string {
 	if a.core != nil {
 		return a.core.GetProxyMode()

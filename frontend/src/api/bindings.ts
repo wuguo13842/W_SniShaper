@@ -82,6 +82,8 @@ export const GetSocks5Enabled = () => appCall('GetSocks5Enabled');
 export const SetSocks5Enabled = (enabled: boolean) => appCall('SetSocks5Enabled', enabled);
 export const GetSocks5Port = () => appCall('GetSocks5Port');
 export const SetSocks5Port = (port: string) => appCall('SetSocks5Port', port);
+export const GetHttpEnabled = () => appCall('GetHttpEnabled');
+export const SetHttpEnabled = (enabled: boolean) => appCall('SetHttpEnabled', enabled);
 export const SetProxyMode = (mode: string) => appCall('SetProxyMode', mode);
 export const StartLogCapture = () => appCall('StartLogCapture');
 export const StartProxy = () => appCall('StartProxy');

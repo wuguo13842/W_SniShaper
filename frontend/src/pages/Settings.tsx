@@ -11,6 +11,8 @@ import {
   GetAutoEnableSysProxyOnAutoStart, SetAutoEnableSysProxyOnAutoStart,
   GetAutoUpdateRules, SetAutoUpdateRules,
   GetSocks5Port, SetSocks5Port, GetTUNConfig, UpdateTUNConfig, GetTUNStatus,
+  GetSocks5Enabled, SetSocks5Enabled,
+  GetHttpEnabled, SetHttpEnabled,
   OpenCertDir, RegenerateCert, GetCAInstallStatus, GetInstalledCerts,
   UninstallCert, ExportConfig, ImportConfigWithSummary,
   GetCloudflareConfig, UpdateCloudflareConfig, GetCloudflareIPStats,
@@ -109,6 +111,8 @@ const Settings: React.FC<SettingsProps> = ({ cache, onCacheUpdate, currentThemeI
   const { mode, setMode } = useColorScheme();
   const [port, setPort] = useState(String(cache.port ?? ''));
   const [socks5Port, setSocks5Port] = useState(String(cache.socks5Port ?? '8081'));
+  const [httpEnabled, setHttpEnabled] = useState<boolean>(cache.httpEnabled !== false);
+  const [socks5Enabled, setSocks5Enabled] = useState<boolean>(cache.socks5Enabled === true);
   const [closeToTray, setCloseToTray] = useState(cache.closeToTray);
   const [autoStart, setAutoStart] = useState(cache.autoStart);
   const [showMainOnAutoStart, setShowMainOnAutoStart] = useState(cache.showMainOnAutoStart);
@@ -165,6 +169,8 @@ const Settings: React.FC<SettingsProps> = ({ cache, onCacheUpdate, currentThemeI
 
   useEffect(() => {
     reloadCriticalData();
+    GetHttpEnabled().then(v => { setHttpEnabled(!!v); onCacheUpdate({ httpEnabled: !!v }); }).catch(() => {});
+    GetSocks5Enabled().then(v => { setSocks5Enabled(!!v); onCacheUpdate({ socks5Enabled: !!v }); }).catch(() => {});
     TriggerCFHealthCheck().catch(console.error);
     GetUpdateChannel().then((c) => {
       if (c) {
@@ -255,6 +261,30 @@ const Settings: React.FC<SettingsProps> = ({ cache, onCacheUpdate, currentThemeI
       onCacheUpdate({ socks5Port: normalized });
       toast.success(t('settings.notifications.updated'));
     } catch (err: any) { toast.error(t('common.failed'), String(err)); }
+  };
+  
+  const handleToggleHttp = async (val: boolean) => {
+    setHttpEnabled(val);
+    try {
+      await SetHttpEnabled(val);
+      onCacheUpdate({ httpEnabled: val });
+      toast.success(t('settings.notifications.updated'));
+    } catch (err: any) {
+      setHttpEnabled(!val);
+      toast.error(t('common.failed'), String(err));
+    }
+  };
+
+  const handleToggleSocks5 = async (val: boolean) => {
+    setSocks5Enabled(val);
+    try {
+      await SetSocks5Enabled(val);
+      onCacheUpdate({ socks5Enabled: val });
+      toast.success(t('settings.notifications.updated'));
+    } catch (err: any) {
+      setSocks5Enabled(!val);
+      toast.error(t('common.failed'), String(err));
+    }
   };
 
   const handleToggleTray = async (val: boolean) => {
@@ -423,36 +453,41 @@ const Settings: React.FC<SettingsProps> = ({ cache, onCacheUpdate, currentThemeI
             <SectionHeader icon={<Anchor size={18} />} label={t('settings.tabs.general')} />
 
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-              <SettingRowInline icon={<Monitor size={18} />} title={t('settings.port_title')}>
-                <Stack direction="row" spacing={1.5} sx={{ alignItems: 'flex-start' }}>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
-                    <TextField
-                      label={t('settings.http_port')}
-                      type="text"
-                      size="small"
-                      value={port}
-                      onChange={(e) => setPort(e.target.value.replace(/\D/g, '').slice(0, 5))}
-                      sx={{ width: 88, '& input': { fontSize: '0.875rem', textAlign: 'center' } }}
-                    />
-                    <Button size="small" variant="contained" color="primary" onClick={handleSavePort}>
-                      {t('common.apply')}
-                    </Button>
-                  </Stack>
-                  <Stack direction="row" spacing={1} sx={{ alignItems: 'flex-start' }}>
-                    <TextField
-                      label={t('settings.socks_port')}
-                      type="text"
-                      size="small"
-                      value={socks5Port}
-                      onChange={(e) => setSocks5Port(e.target.value.replace(/\D/g, '').slice(0, 5))}
-                      onBlur={(e) => handleSaveSocks5Port(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-                      sx={{ width: 88, '& input': { fontSize: '0.875rem', textAlign: 'center' } }}
-                    />
-                    <Button size="small" variant="contained" color="primary" onClick={() => handleSaveSocks5Port(socks5Port)}>
-                      {t('common.apply')}
-                    </Button>
-                  </Stack>
+              <SettingRowInline icon={<Monitor size={18} />} title={t('settings.http.title')} desc={t('settings.http.desc')}>
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                  <Switch size="small" checked={httpEnabled} onChange={(e) => handleToggleHttp(e.target.checked)} />
+                  <TextField
+                    label={t('settings.http_port')}
+                    type="text"
+                    size="small"
+                    value={port}
+                    disabled={!httpEnabled}
+                    onChange={(e) => setPort(e.target.value.replace(/\D/g, '').slice(0, 5))}
+                    sx={{ width: 88, '& input': { fontSize: '0.875rem', textAlign: 'center' } }}
+                  />
+                  <Button size="small" variant="contained" color="primary" disabled={!httpEnabled} onClick={handleSavePort}>
+                    {t('common.apply')}
+                  </Button>
+                </Stack>
+              </SettingRowInline>
+
+              <SettingRowInline icon={<Monitor size={18} />} title={t('settings.socks5.title')} desc={t('settings.socks5.desc')}>
+                <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                  <Switch size="small" checked={socks5Enabled} onChange={(e) => handleToggleSocks5(e.target.checked)} />
+                  <TextField
+                    label={t('settings.socks_port')}
+                    type="text"
+                    size="small"
+                    value={socks5Port}
+                    disabled={!socks5Enabled}
+                    onChange={(e) => setSocks5Port(e.target.value.replace(/\D/g, '').slice(0, 5))}
+                    onBlur={(e) => handleSaveSocks5Port(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                    sx={{ width: 88, '& input': { fontSize: '0.875rem', textAlign: 'center' } }}
+                  />
+                  <Button size="small" variant="contained" color="primary" disabled={!socks5Enabled} onClick={() => handleSaveSocks5Port(socks5Port)}>
+                    {t('common.apply')}
+                  </Button>
                 </Stack>
               </SettingRowInline>
 

@@ -32,6 +32,7 @@ type RuleManager struct {
 	socks5Enabled                 bool
 	socks5Port                    string
 	listenPort                    string
+	httpEnabled                   bool
 	echProfiles                   []ECHProfile
 	nat64Profiles                 []NAT64Profile
 	autoRouter                    *AutoRouter
@@ -163,6 +164,7 @@ func NewRuleManager(settingsPath, rulesPath string) *RuleManager {
 		showMainOnAutoStart: true,
 		language:            "zh",
 		theme:               "dark",
+		httpEnabled:         true,
 	}
 }
 
@@ -300,7 +302,8 @@ func (rm *RuleManager) loadSettingsConfig() error {
 	rm.autoEnableProxyOnAutoStart = false
 	rm.autoEnableSysProxyOnAutoStart = true
 	rm.autoUpdateRules = true
-
+	rm.httpEnabled = true
+	
 	// 2. Override with JSON values if they exist
 	rm.cloudflareConfig = config.CloudflareConfig
 	rm.tunConfig = config.TUN
@@ -342,6 +345,9 @@ func (rm *RuleManager) loadSettingsConfig() error {
 	}
 	if config.Socks5Enabled != nil {
 		rm.socks5Enabled = *config.Socks5Enabled
+	}
+	if config.HttpEnabled != nil {
+		rm.httpEnabled = *config.HttpEnabled
 	}
 	if config.MigrationEnabled != nil {
 		rm.migrationEnabled = *config.MigrationEnabled
@@ -528,6 +534,18 @@ func (rm *RuleManager) GetSocks5Port() string {
 func (rm *RuleManager) SetSocks5Port(port string) {
 	rm.mu.Lock()
 	rm.socks5Port = port
+	rm.mu.Unlock()
+}
+
+func (rm *RuleManager) GetHttpEnabled() bool {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	return rm.httpEnabled
+}
+
+func (rm *RuleManager) SetHttpEnabled(enabled bool) {
+	rm.mu.Lock()
+	rm.httpEnabled = enabled
 	rm.mu.Unlock()
 }
 
@@ -874,6 +892,7 @@ func (rm *RuleManager) saveSettingsConfig() error {
 	autoEnableSysProxyOnAutoStart := rm.autoEnableSysProxyOnAutoStart
 	autoUpdateRules := rm.autoUpdateRules
 	socks5Enabled := rm.socks5Enabled
+	httpEnabled := rm.httpEnabled
 	migrationEnabled := rm.migrationEnabled
 	cloudflareConfig := rm.cloudflareConfig
 	tunConfig := normalizeTUNConfig(rm.tunConfig)
@@ -894,6 +913,7 @@ func (rm *RuleManager) saveSettingsConfig() error {
 		Language:                   rm.language,
 		Theme:                      rm.theme,
 		Socks5Enabled:              &socks5Enabled,
+		HttpEnabled:                &httpEnabled,
 		MigrationEnabled:           &migrationEnabled,
 		MigrationServer:            rm.migrationServer,
 		UpdateChannel:              rm.updateChannel,
