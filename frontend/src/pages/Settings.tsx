@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   ShieldAlert, Download, FolderOpen, RefreshCcw, Monitor, Anchor,
   Cpu, Globe, BellRing, Activity, Bolt, Delete,
-  AlertCircle, Sun, Moon, Wifi, FileText, Settings as SettingsIcon
+  AlertCircle, Sun, Moon, Wifi, FileText, Settings as SettingsIcon,
 } from '../lib/icons';
 import {
   GetListenPort, SetListenPort, GetCloseToTray, SetCloseToTray,
@@ -1308,6 +1308,7 @@ const Settings: React.FC<SettingsProps> = ({ cache, onCacheUpdate, currentThemeI
             </StackedRow>
           </Box>
         </Grid>
+
       </Grid>
       </Box>
     </Box>

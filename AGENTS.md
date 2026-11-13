@@ -22,7 +22,7 @@ SniShaper is a Windows local proxy tool using ECH Injection, TLS-RF Fragmentatio
 - `/app/` — Go backend: App struct, API bindings (`app_api.go`), system proxy (`app_system.go`), autostart
 - `/core/` — Mihomo core process management (`core_client.go`), TUN, admin elevation
 - `/proxy` — Proxy server (MITM, SOCKS5, TLS fragmentation, TUN flow, auto-routing, rules): no longer a local directory, imported from snishaper-core as `proxy`
-- `/pkg/` — Local packages only: `platform`, `tun`, and a thin `sysproxy` facade; cert manager, CF IP pool, DoH resolver, netiface, singtun, subscription, TLS fragmentation and GFWList all live in snishaper-core
+- `/pkg/` — Local packages only: a thin `sysproxy` facade; cert manager, CF IP pool, DoH resolver, netiface, singtun, subscription, TLS fragmentation and GFWList all live in snishaper-core
 - `evolution` — Rule evolution testing (tester, rule generator, result analysis) is `github.com/SnishaperTeam/snishaper-core/evolution`; there is no local `/evolution/` directory
 - `/frontend/src/` — React SPA: 10 pages (Dashboard, Proxies, Rules, Routing, DNS, Evolution, Logs, Settings, About, Welcome)
 - `/rules/config.json` — Site group rules (~3800 lines), MITM/ECH/SNI-fake configs
@@ -41,7 +41,7 @@ Engine and shared feature packages come from `github.com/SnishaperTeam/snishaper
 # Conventions
 
 - Go: standard layout, `snishaper` module path, no external DI framework
-- Frontend: React 19 + TypeScript 6, `@/` path alias for `./src/`, MUI v9 + emotion for styling, `@heroicons/react` for icons
+- Frontend: React 19 + TypeScript 6, `@/` path alias for `./src/`, MUI v9 + emotion for styling, `@iconify/react` + `@iconify-icons/*` for icons (see `frontend/src/lib/icons.tsx`)
 - Error handling: log via `a.appendLog()`, return errors to frontend; no panic except top-level recover in `main.go`
 - Naming: Go `camelCase` for unexported, `PascalCase` for exported; TS `camelCase` for functions/vars, `PascalCase` for components/types
 - Imports: Go stdlib → third-party → internal; TS: React → components → API → i18n
@@ -55,11 +55,10 @@ Engine and shared feature packages come from `github.com/SnishaperTeam/snishaper
 
 # Security & Environment
 
-- Dev certificate: `devcert.pfx` (password: `password`)
+- MSIX signing: the release pipeline restores the pfx from the `MSIX_PFX_BASE64` secret (password `MSIX_PFX_PASSWORD`); without it an ephemeral cert is generated per build. A local untracked `devcert.pfx` may exist for dev signing. Release bundles ship only the public `devcert.cer` — never the pfx or its password
 - Cert manager lives in snishaper-core (`certmanager`); it writes the CA under the per-user config dir (runtime, gitignored)
 - Admin rights required for system proxy registry writes and TUN
 - Registry access via `golang.org/x/sys/windows/registry` (not `reg.exe`)
-- MSIX packaging requires PFX signing cert; CI uses self-signed
 
 # Evidence Required
 

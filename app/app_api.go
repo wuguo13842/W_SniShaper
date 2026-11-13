@@ -38,7 +38,10 @@ func NewApp() *App {
 
 	ruleManager := proxy.NewRuleManager(settingsPath, rulesPath,
 		proxy.WithLogger(corelog.Std), proxy.WithRouterDebug(os.Getenv("SNISHAPER_ROUTER_DEBUG") == "1"))
-	if err := ruleManager.LoadConfig(); err != nil {
+	// 带迁移报告加载：版本升级/字段修复/备份路径通过
+	// GetLastMigrationReport 展示给用户，加载失败保持原有回退行为。
+	migrationReport, err := ruleManager.LoadConfigWithMigration()
+	if err != nil {
 		log.Printf("[warn] Failed to load config at init: %v", err)
 	}
 
@@ -51,17 +54,23 @@ func NewApp() *App {
 	proxyServer := proxy.NewProxyServer("127.0.0.1:"+port, proxy.WithLogger(corelog.Std))
 	proxyServer.SetRuleManager(ruleManager)
 	a := &App{
-		ctx:                ctx,
-		cancel:             cancel,
-		proxyServer:        proxyServer,
-		ruleManager:        ruleManager,
-		certPath:           common.ConfigCertDir(execDir),
-		proxyMarkerPath:    common.ConfigProxyMarker(execDir),
-		ifaces:             netiface.NewSelector(),
-		launchedAtStartup:  HasLaunchArg("--startup"),
-		autoProxyAtStartup: HasLaunchArg("--autoproxy"),
-		core:               core.NewCoreClient(),
+		ctx:                    ctx,
+		cancel:                 cancel,
+		proxyServer:            proxyServer,
+		ruleManager:            ruleManager,
+		settingsPath:           settingsPath,
+		rulesPath:              rulesPath,
+		certPath:               common.ConfigCertDir(execDir),
+		proxyMarkerPath:        common.ConfigProxyMarker(execDir),
+		ifaces:                 netiface.NewSelector(),
+		launchedAtStartup:      HasLaunchArg("--startup"),
+		autoProxyAtStartup:     HasLaunchArg("--autoproxy"),
+		startupMigrationReport: migrationReport,
+		core:                   core.NewCoreClient(),
 	}
+	// Download tuning is env-tunable but fixed for the process lifetime:
+	// resolving it here keeps the download goroutines off lazy field writes.
+	a.downloadConcurrency, a.downloadChunkSize = initDownloadTuning()
 
 	a.proxyServer.SetCFRefreshCallback(func() {
 		a.RefreshCloudflareIPPool()
@@ -638,6 +647,22 @@ func (a *App) GetCore() *core.CoreClient {
 	return a.core
 }
 
+// GetActiveConnections 返回 core 进程的实时连接快照（有界注册表，
+// 最多 4096 条），供连接查看器轮询。core 未运行时返回空切片。
+func (a *App) GetActiveConnections() []proxy.ConnInfo {
+	if a.core == nil {
+		return []proxy.ConnInfo{}
+	}
+	return a.core.GetActiveConnections()
+}
+
+// ExplainMatch 用与真实连接完全相同的匹配管线模拟 host 的处理决策
+//（不产生路由事件）。全局模式取运行中的 core；process 为可选的
+// 进程名（per-app 规则模拟）。
+func (a *App) ExplainMatch(host, process string) proxy.MatchExplanation {
+	return a.ruleManager.ExplainMatch(host, a.GetProxyMode(), process)
+}
+
 // GetAppRecentLogs returns only the app-side in-memory log lines.
 func (a *App) GetAppRecentLogs(limit int) string {
 	if limit <= 0 {
@@ -808,16 +833,36 @@ func (a *App) GetStats() core.StatsReply {
 	}
 }
 
-func (a *App) GetCACertPath() string {
-	if a.certManager == nil && a.certPath != "" {
+// setCertManager stores the cert manager under the protecting mutex; both the
+// startup hook and the lazy GUI path funnel through here.
+func (a *App) setCertManager(cm *certmanager.CertManager) {
+	a.certManagerMu.Lock()
+	a.certManager = cm
+	a.certManagerMu.Unlock()
+}
+
+// ensureCertManager lazily initializes the cert manager for bindings that can
+// run before the startup hook (or in config-only CLI commands). Concurrent
+// callers are serialized by certManagerMu, so the pointer write is race-free.
+func (a *App) ensureCertManager() {
+	a.certManagerMu.Lock()
+	defer a.certManagerMu.Unlock()
+	if a.certManager == nil {
 		if cm, err := certmanager.InitCertManager(a.certPath); err == nil {
 			a.certManager = cm
 		}
 	}
-	if a.certManager != nil {
-		return a.certManager.GetCACertPath()
+}
+
+func (a *App) GetCACertPath() string {
+	a.ensureCertManager()
+	a.certManagerMu.Lock()
+	cm := a.certManager
+	a.certManagerMu.Unlock()
+	if cm == nil {
+		return ""
 	}
-	return ""
+	return cm.GetCACertPath()
 }
 
 func (a *App) GetCACertPEM() string {
@@ -828,21 +873,18 @@ func (a *App) GetCACertPEM() string {
 }
 
 func (a *App) GetCAInstallStatus() CAInstallStatus {
-	if a.certManager == nil {
-		if a.certPath != "" {
-			if cm, err := certmanager.InitCertManager(a.certPath); err == nil {
-				a.certManager = cm
-			}
-		}
-	}
-	if a.certManager == nil {
+	a.ensureCertManager()
+	a.certManagerMu.Lock()
+	cm := a.certManager
+	a.certManagerMu.Unlock()
+	if cm == nil {
 		return CAInstallStatus{
 			CertPath:    a.certPath,
 			Platform:    runtime.GOOS,
 			InstallHelp: "证书状态初始化中",
 		}
 	}
-	status := a.certManager.GetCAInstallStatus()
+	status := cm.GetCAInstallStatus()
 	return CAInstallStatus{
 		Installed:   status.Installed,
 		Platform:    status.Platform,
@@ -1488,6 +1530,13 @@ func (a *App) TestNAT64Profile(prefix string) (int64, error) {
 
 func (a *App) GetMigrationEnabled() bool {
 	return a.ruleManager.GetMigrationEnabled()
+}
+
+// GetLastMigrationReport 返回启动加载配置时产生的迁移/校验报告
+// （版本迁移、字段修复、备份路径；Errors 非空表示配置无法安全迁移）。
+// 与 GetMigrationEnabled 的「会话迁移代理模式」无关。
+func (a *App) GetLastMigrationReport() proxy.MigrationReport {
+	return a.startupMigrationReport
 }
 
 func (a *App) SetMigrationEnabled(enabled bool) error {
