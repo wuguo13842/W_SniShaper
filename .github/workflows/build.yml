@@ -79,12 +79,15 @@ jobs:
   mark-running:
     name: mark CI running
     needs: gate
-    # Dependabot-triggered runs receive no repo secrets, so the syntax-bot
-    # identity is unavailable there; skip the label state machine for those
-    # PRs (gate still lets the build matrix through).
+    # Dependabot-triggered runs and fork PRs receive no repo secrets, so the
+    # syntax-bot identity is unavailable there; skip the label state machine
+    # for those (gate still lets the build matrix through). Detected via
+    # head.repo.fork because the secrets context cannot be referenced in a
+    # job-level if (the workflow fails to start).
     if: >-
       needs.gate.outputs.proceed == 'true' &&
-      github.actor != 'dependabot[bot]'
+      github.actor != 'dependabot[bot]' &&
+      !github.event.pull_request.head.repo.fork
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -484,6 +487,52 @@ jobs:
             --row "SniShaper.app zip=build/bin/macos/SniShaper-macos-*.zip"
 
   # ------------------------------------------------------------------
+  # Static analysis + unit tests: go vet, go test and the frontend's
+  # authoritative tsc type check, independent of the build matrix so a
+  # red check fails fast (minutes) instead of after a full build.
+  # ------------------------------------------------------------------
+  test:
+    name: test & vet
+    needs: gate
+    if: >-
+      always() && !cancelled() &&
+      (github.event_name != 'pull_request' || needs.gate.outputs.proceed == 'true')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      # main.go embeds all:frontend/dist; vet/test compile the main package,
+      # which needs the pattern to match at least one file (contents unused).
+      - name: Create frontend/dist placeholder for embed
+        shell: bash
+        run: mkdir -p frontend/dist && echo placeholder > frontend/dist/index.html
+
+      - name: go vet
+        run: go vet -tags with_gvisor ./...
+
+      - name: go test
+        run: go test -tags with_gvisor ./...
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Frontend type check (tsc --noEmit)
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+  # ------------------------------------------------------------------
   # Stable single-point summary used as the required status check in
   # branch protection ("ci"). Succeeds when every build job succeeded
   # or was skipped (gate-skipped PR runs skip the whole matrix); fails on
@@ -491,7 +540,7 @@ jobs:
   # ------------------------------------------------------------------
   ci:
     name: ci
-    needs: [gate, matrix-build, darwin]
+    needs: [gate, matrix-build, darwin, test]
     if: always() && !cancelled()
     runs-on: ubuntu-latest
     permissions:
@@ -529,10 +578,13 @@ jobs:
   bot-report:
     name: Report CI result (syntax-bot)
     needs: [gate, ci]
+    # Same guard as mark-running: fork PRs get no repo secrets, so the
+    # syntax-bot App token cannot be minted there.
     if: >-
       always() && !cancelled() &&
       needs.gate.outputs.proceed == 'true' &&
-      github.actor != 'dependabot[bot]'
+      github.actor != 'dependabot[bot]' &&
+      !github.event.pull_request.head.repo.fork
     runs-on: ubuntu-latest
     permissions:
       # GITHUB_TOKEN grants for the diagnostic log download; comment and
